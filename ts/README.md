@@ -2,8 +2,9 @@
 
 Zero-dependency prompt compression for LLM applications.
 
-Unlike the Python SDK (which wraps the 1.2 GB LLMLingua-2 model), this SDK
-ships **no ML model, no downloads and zero runtime dependencies**. Its local
+Unlike this project's original Python implementation (which wrapped the
+1.2 GB LLMLingua-2 model; available in git history), this SDK ships
+**no ML model, no downloads and zero runtime dependencies**. Its local
 compressor — `Extract` — is a deterministic, weights-free extractive
 algorithm: sentence segmentation → integer term-rarity scoring with
 entity/number/identifier/constraint boosts → redundancy filtering → greedy
