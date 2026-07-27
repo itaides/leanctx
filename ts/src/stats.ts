@@ -14,12 +14,17 @@ export interface CompressionStats {
     costUsd: number;
 }
 
-export function passthroughStats(): CompressionStats {
+/** Build a CompressionStats with sensible defaults for any omitted field. */
+export function makeStats(partial: Partial<CompressionStats> = {}): CompressionStats {
     return {
-        inputTokens: 0,
-        outputTokens: 0,
-        ratio: 1.0,
-        method: "passthrough",
-        costUsd: 0.0,
+        inputTokens: partial.inputTokens ?? 0,
+        outputTokens: partial.outputTokens ?? 0,
+        ratio: partial.ratio ?? 1.0,
+        method: partial.method ?? "passthrough",
+        costUsd: partial.costUsd ?? 0.0,
     };
+}
+
+export function passthroughStats(): CompressionStats {
+    return makeStats({ method: "passthrough" });
 }

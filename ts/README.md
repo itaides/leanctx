@@ -1,54 +1,93 @@
-# leanctx (TypeScript)
+# leanctx (TypeScript / Bun)
 
-Drop-in prompt compression for production LLM applications. TypeScript SDK.
+Zero-dependency prompt compression for LLM applications.
 
-> **Status:** v0.0.0 — skeleton. The Python SDK is feature-complete for v0.1
-> (LLMLingua-2 + SelfLLM + strategies); the TS SDK currently mirrors the
-> public surface with a passthrough implementation. Real compression lands
-> when v0.1 releases.
+Unlike this project's original Python implementation (which wrapped the
+1.2 GB LLMLingua-2 model; available in git history), this SDK ships
+**no ML model, no downloads and zero runtime dependencies**. Its local
+compressor — `Extract` — is a deterministic, weights-free extractive
+algorithm: sentence segmentation → integer term-rarity scoring with
+entity/number/identifier/constraint boosts → redundancy filtering → greedy
+selection to a keep-ratio. A heuristic classifier gates it so code, errors,
+JSON and tool blocks are never touched; prohibitions ("do not ...") always
+survive; system messages and the most recent turns are never compressed.
+
+This package is the **reference implementation** of
+[`docs/parity-spec.md`](../docs/parity-spec.md); the Rust (`rust/`) and Go
+(`go/`) ports reproduce its output byte-for-byte (see `parity/`).
 
 ## Install
 
 ```bash
-npm install leanctx
-# and your provider SDK:
-npm install @anthropic-ai/sdk        # for Anthropic
-npm install openai                   # for OpenAI
+npm install leanctx    # or: bun add leanctx
 ```
 
-## Usage (preview)
+## Use with your own SDK (recommended)
+
+Keep the official OpenAI/Anthropic SDK you already have — it's your
+dependency, not ours — and hand it a compressing fetch:
 
 ```ts
-import { Anthropic } from "leanctx";
+import OpenAI from "openai";
+import { leanctxFetch } from "leanctx";
 
-const client = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-    leanctxConfig: {
+const client = new OpenAI({
+    fetch: leanctxFetch({
         mode: "on",
-        trigger: { thresholdTokens: 4000 },
-        routing: { prose: "lingua" },  // v0.1
-    },
+        trigger: { thresholdTokens: 2000 },
+        routing: { prose: "extract" },
+    }),
 });
-
-const response = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 1024,
-    messages: [{ role: "user", content: longDocument }],
-});
-
-// v0.1 will attach compression telemetry:
-// response.usage.leanctxTokensSaved
+// requests are compressed on the wire; responses gain
+// usage.leanctxTokensSaved / leanctxRatio / leanctxMethod
 ```
 
-## Why prefer the Python SDK for now
+Or wrap an existing client instance (duck-typed, works with both SDKs):
 
-The Python SDK already ships real compression (LLMLingua-2 local, SelfLLM
-via Haiku-style delegation, dedup + purge-errors strategies) and full
-end-to-end tests. TS is currently passthrough only.
+```ts
+import { wrap } from "leanctx";
+const client = wrap(new OpenAI(), { mode: "on", routing: { prose: "extract" } });
+```
 
-For cross-language deployments, consider running leanctx as an HTTP proxy
-(v0.3+) and pointing your TS client at it.
+## Minimal built-in clients
 
-## License
+For simple non-streaming chat calls you can skip the official SDKs entirely:
+
+```ts
+import { OpenAI, Anthropic } from "leanctx"; // minimal clients, not full SDKs
+
+const client = new OpenAI({ leanctxConfig: { mode: "on", routing: { prose: "extract" } } });
+const response = await client.chat.completions.create({ model: "gpt-4o-mini", messages });
+```
+
+## Core API
+
+```ts
+import { Middleware } from "leanctx";
+
+const mw = new Middleware({ mode: "on", routing: { prose: "extract" } });
+const [compressed, stats] = mw.compressMessages(messages);
+```
+
+`SelfLLM` (LLM-delegated summarization over raw fetch, providers:
+anthropic/openai/gemini) is available via `routing: { prose: "selfllm" }`
+with the async entry point, or standalone as `new SelfLLM({...})`.
+
+## Expected savings — honest math
+
+Only PROSE is compressed; everything the classifier flags as
+code/error/structured and all tool/image blocks pass through verbatim.
+Total savings ≈ `prose_token_share × (1 − ratio)` plus dedup/purge wins.
+Prose-heavy histories: ~40–50% at ratio 0.5. Code/tool-heavy agent
+histories: substantially less — measure on your own traffic.
+
+## Development
+
+```bash
+bun install
+bun test               # 110 tests incl. quality gates
+bun x tsc --noEmit
+bun scripts/gen-parity.ts   # regenerate ../parity golden vectors
+```
 
 MIT. See the repo root `LICENSE`.
