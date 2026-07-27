@@ -1,85 +1,92 @@
 /**
- * Anthropic wrapper — drop-in replacement for `@anthropic-ai/sdk`.
+ * Anthropic — leanctx's minimal, zero-dependency Anthropic client.
  *
- * Usage::
+ * This is a *minimal client*, not a drop-in replacement for
+ * `@anthropic-ai/sdk`: it covers `messages.create` (non-streaming) over raw
+ * fetch, with request-side compression and leanctx telemetry on the response.
+ * Users who need the full official SDK surface should keep their own SDK and
+ * integrate via `leanctxFetch` or `wrap` instead.
  *
  *     import { Anthropic } from "leanctx";
- *     const client = new Anthropic({ apiKey: "sk-ant-..." });
- *     const response = await client.messages.create({ ... });
- *     // response.usage.leanctxTokensSaved is attached
- *
- * v0.0.x is passthrough — the wrapper forwards to the real SDK without
- * compression. Compression lands in v0.1 via Middleware.
+ *     const client = new Anthropic({ apiKey, leanctxConfig: { mode: "on" } });
+ *     const response = await client.messages.create({ model, max_tokens, messages });
+ *     // response.usage.leanctxTokensSaved etc.
  */
 
-import Anthropic_SDK from "@anthropic-ai/sdk";
-import type { LeanctxConfig } from "./middleware.js";
 import { Middleware } from "./middleware.js";
 import { attachTelemetry } from "./telemetry.js";
+import type { ChatMessage, LeanctxConfig } from "./types.js";
 
-type AnthropicClientOptions = ConstructorParameters<typeof Anthropic_SDK>[0];
+const DEFAULT_BASE_URL = "https://api.anthropic.com";
+const ANTHROPIC_VERSION = "2023-06-01";
 
 export interface LeanctxClientOptions {
+    apiKey?: string;
+    baseUrl?: string;
     leanctxConfig?: LeanctxConfig;
+    /** Injectable fetch for tests. Defaults to globalThis.fetch. */
+    fetchImpl?: typeof fetch;
+}
+
+export interface AnthropicMessageParams {
+    model: string;
+    max_tokens: number;
+    messages: ChatMessage[];
+    system?: unknown;
+    [key: string]: unknown;
 }
 
 export class Anthropic {
-    private _upstream: Anthropic_SDK;
-    private _middleware: Middleware;
-    readonly messages: MessagesWrapper;
+    readonly messages: AnthropicMessages;
 
-    constructor(options: AnthropicClientOptions & LeanctxClientOptions = {}) {
-        const { leanctxConfig, ...upstreamOptions } = options;
-        this._upstream = new Anthropic_SDK(upstreamOptions);
-        this._middleware = new Middleware(leanctxConfig ?? {});
-        this.messages = new MessagesWrapper(this._upstream, this._middleware);
-    }
-
-    // Forward any other property access to the upstream client. The cast
-    // matches the Python __getattr__ fallback: non-intercepted attributes
-    // (completions, batches, models, etc.) pass through untouched.
-    get upstream(): Anthropic_SDK {
-        return this._upstream;
+    constructor(options: LeanctxClientOptions = {}) {
+        const apiKey =
+            options.apiKey ??
+            (globalThis as { process?: { env?: Record<string, string> } }).process?.env
+                ?.ANTHROPIC_API_KEY ??
+            "";
+        const baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
+        const middleware = new Middleware(options.leanctxConfig ?? {});
+        this.messages = new AnthropicMessages(
+            baseUrl,
+            apiKey,
+            middleware,
+            options.fetchImpl ?? fetch,
+        );
     }
 }
 
-class MessagesWrapper {
+class AnthropicMessages {
     constructor(
-        private readonly _upstream: Anthropic_SDK,
-        private readonly _middleware: Middleware,
+        private readonly baseUrl: string,
+        private readonly apiKey: string,
+        private readonly middleware: Middleware,
+        private readonly fetchImpl: typeof fetch,
     ) {}
 
-    async create(params: Parameters<Anthropic_SDK["messages"]["create"]>[0]): Promise<unknown> {
-        // The Anthropic SDK's create signature is a discriminated union
-        // (stream vs non-stream). For both paths we route messages
-        // through the middleware (passthrough in v0.0.x — real
-        // compression port lands in v0.2) and attach leanctx telemetry
-        // to the response's usage object before returning.
-        let stats = undefined;
-        if ("messages" in params && Array.isArray(params.messages)) {
-            const [compressed, s] = this._middleware.compressMessages(
-                params.messages as Parameters<typeof this._middleware.compressMessages>[0],
-            );
-            params = { ...params, messages: compressed } as typeof params;
-            stats = s;
-        }
-        const response = await this._upstream.messages.create(params);
-        if (stats !== undefined) {
-            attachTelemetry(response, stats);
-        }
-        return response;
-    }
+    async create(params: AnthropicMessageParams): Promise<Record<string, unknown>> {
+        const [compressed, stats] = await this.middleware.compressMessagesAsync(
+            params.messages,
+        );
+        const body = { ...params, messages: compressed };
 
-    stream(params: Parameters<Anthropic_SDK["messages"]["stream"]>[0]): unknown {
-        // Streaming responses emit chunks; telemetry aggregation across
-        // the stream is v0.2 work. We still route messages through the
-        // middleware on the request side.
-        if ("messages" in params && Array.isArray(params.messages)) {
-            const [compressed] = this._middleware.compressMessages(
-                params.messages as Parameters<typeof this._middleware.compressMessages>[0],
+        const response = await this.fetchImpl(`${this.baseUrl}/v1/messages`, {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                "x-api-key": this.apiKey,
+                "anthropic-version": ANTHROPIC_VERSION,
+            },
+            body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+            const detail = await response.text().catch(() => "");
+            throw new Error(
+                `Anthropic request failed: HTTP ${response.status} ${detail.slice(0, 300)}`,
             );
-            params = { ...params, messages: compressed } as typeof params;
         }
-        return this._upstream.messages.stream(params);
+        const json = (await response.json()) as Record<string, unknown>;
+        attachTelemetry(json, stats);
+        return json;
     }
 }

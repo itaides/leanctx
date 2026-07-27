@@ -1,75 +1,92 @@
 /**
- * OpenAI wrapper — drop-in replacement for `openai`.
+ * OpenAI — leanctx's minimal, zero-dependency OpenAI client.
  *
- * Usage::
+ * This is a *minimal client*, not a drop-in replacement for the `openai`
+ * package: it covers `chat.completions.create` (non-streaming) over raw
+ * fetch, with request-side compression and leanctx telemetry on the response.
+ * Users who need the full official SDK surface should keep their own SDK and
+ * integrate via `leanctxFetch` or `wrap` instead.
  *
  *     import { OpenAI } from "leanctx";
- *     const client = new OpenAI({ apiKey: "sk-..." });
- *     const response = await client.chat.completions.create({ ... });
- *
- * v0.0.x is passthrough.
+ *     const client = new OpenAI({ apiKey, leanctxConfig: { mode: "on" } });
+ *     const response = await client.chat.completions.create({ model, messages });
+ *     // response.usage.leanctxTokensSaved etc.
  */
 
-import OpenAI_SDK from "openai";
-import type { LeanctxConfig } from "./middleware.js";
 import { Middleware } from "./middleware.js";
 import { attachTelemetry } from "./telemetry.js";
+import type { ChatMessage, LeanctxConfig } from "./types.js";
 
-type OpenAIClientOptions = ConstructorParameters<typeof OpenAI_SDK>[0];
+const DEFAULT_BASE_URL = "https://api.openai.com";
 
 export interface OpenAILeanctxClientOptions {
+    apiKey?: string;
+    baseUrl?: string;
     leanctxConfig?: LeanctxConfig;
+    /** Injectable fetch for tests. Defaults to globalThis.fetch. */
+    fetchImpl?: typeof fetch;
+}
+
+export interface OpenAIChatParams {
+    model: string;
+    messages: ChatMessage[];
+    [key: string]: unknown;
 }
 
 export class OpenAI {
-    private _upstream: OpenAI_SDK;
-    private _middleware: Middleware;
-    readonly chat: ChatWrapper;
+    readonly chat: { completions: OpenAICompletions };
 
-    constructor(options: OpenAIClientOptions & OpenAILeanctxClientOptions = {}) {
-        const { leanctxConfig, ...upstreamOptions } = options;
-        this._upstream = new OpenAI_SDK(upstreamOptions);
-        this._middleware = new Middleware(leanctxConfig ?? {});
-        this.chat = new ChatWrapper(this._upstream, this._middleware);
-    }
-
-    get upstream(): OpenAI_SDK {
-        return this._upstream;
-    }
-}
-
-class ChatWrapper {
-    readonly completions: CompletionsWrapper;
-
-    constructor(upstream: OpenAI_SDK, middleware: Middleware) {
-        this.completions = new CompletionsWrapper(upstream, middleware);
+    constructor(options: OpenAILeanctxClientOptions = {}) {
+        const apiKey =
+            options.apiKey ??
+            (globalThis as { process?: { env?: Record<string, string> } }).process?.env
+                ?.OPENAI_API_KEY ??
+            "";
+        const baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, "");
+        const middleware = new Middleware(options.leanctxConfig ?? {});
+        this.chat = {
+            completions: new OpenAICompletions(
+                baseUrl,
+                apiKey,
+                middleware,
+                options.fetchImpl ?? fetch,
+            ),
+        };
     }
 }
 
-class CompletionsWrapper {
+class OpenAICompletions {
     constructor(
-        private readonly _upstream: OpenAI_SDK,
-        private readonly _middleware: Middleware,
+        private readonly baseUrl: string,
+        private readonly apiKey: string,
+        private readonly middleware: Middleware,
+        private readonly fetchImpl: typeof fetch,
     ) {}
 
-    async create(
-        params: Parameters<OpenAI_SDK["chat"]["completions"]["create"]>[0],
-    ): Promise<unknown> {
-        let stats = undefined;
-        if ("messages" in params && Array.isArray(params.messages)) {
-            const [compressed, s] = this._middleware.compressMessages(
-                params.messages as Parameters<typeof this._middleware.compressMessages>[0],
+    async create(params: OpenAIChatParams): Promise<Record<string, unknown>> {
+        const [compressed, stats] = await this.middleware.compressMessagesAsync(
+            params.messages,
+        );
+        const body = { ...params, messages: compressed };
+
+        const response = await this.fetchImpl(`${this.baseUrl}/v1/chat/completions`, {
+            method: "POST",
+            headers: {
+                "content-type": "application/json",
+                authorization: `Bearer ${this.apiKey}`,
+            },
+            body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+            const detail = await response.text().catch(() => "");
+            throw new Error(
+                `OpenAI request failed: HTTP ${response.status} ${detail.slice(0, 300)}`,
             );
-            params = { ...params, messages: compressed } as typeof params;
-            stats = s;
         }
-        const response = await this._upstream.chat.completions.create(params);
-        // Only attach when we actually ran the middleware (stream=false
-        // returns a ChatCompletion; stream=true returns an iterator
-        // whose chunks don't carry usage until the final chunk — v0.2).
-        if (stats !== undefined && !(params as { stream?: boolean }).stream) {
-            attachTelemetry(response, stats);
+        const json = (await response.json()) as Record<string, unknown>;
+        if (params.stream !== true) {
+            attachTelemetry(json, stats);
         }
-        return response;
+        return json;
     }
 }

@@ -6,11 +6,24 @@
  * Extract compressor in place of neural prompt-compression models.
  */
 
+import { registerCompressor } from "./middleware.js";
+import { SelfLLM } from "./compressors/selfllm.js";
+
+// Make `routing: { prose: "selfllm" }` work out of the box. Registered here
+// (not in middleware.ts) so the core pipeline stays free of network code.
+registerCompressor("selfllm", (cfg) => new SelfLLM(cfg.selfllm ?? {}));
+
 export { Anthropic } from "./anthropic.js";
-export type { LeanctxClientOptions } from "./anthropic.js";
+export type { LeanctxClientOptions, AnthropicMessageParams } from "./anthropic.js";
 
 export { OpenAI } from "./openai.js";
-export type { OpenAILeanctxClientOptions } from "./openai.js";
+export type { OpenAILeanctxClientOptions, OpenAIChatParams } from "./openai.js";
+
+export { leanctxFetch } from "./fetch.js";
+export { wrap } from "./wrap.js";
+
+export { SelfLLM } from "./compressors/selfllm.js";
+export type { SelfLLMOptions, SelfLLMProvider } from "./compressors/selfllm.js";
 
 export { Middleware, registerCompressor } from "./middleware.js";
 export type { ChatMessage, LeanctxConfig } from "./types.js";

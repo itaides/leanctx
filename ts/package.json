@@ -1,7 +1,7 @@
 {
     "name": "leanctx",
-    "version": "0.0.0",
-    "description": "Drop-in prompt compression for production LLM applications. TypeScript SDK — skeleton for v0.1.",
+    "version": "0.1.0",
+    "description": "Zero-dependency prompt compression for LLM applications: deterministic extractive compressor, classifier-gated pipeline, fetch middleware and minimal clients.",
     "keywords": [
         "llm",
         "prompt-compression",
@@ -9,7 +9,8 @@
         "openai",
         "gemini",
         "rag",
-        "langchain"
+        "context",
+        "tokens"
     ],
     "author": "jia-gao",
     "license": "MIT",
@@ -38,23 +39,11 @@
     "scripts": {
         "build": "tsc",
         "typecheck": "tsc --noEmit",
+        "test": "bun test",
         "clean": "rm -rf dist"
     },
-    "peerDependencies": {
-        "@anthropic-ai/sdk": "^0.40.0",
-        "openai": "^5.0.0"
-    },
-    "peerDependenciesMeta": {
-        "@anthropic-ai/sdk": {
-            "optional": true
-        },
-        "openai": {
-            "optional": true
-        }
-    },
     "devDependencies": {
-        "@anthropic-ai/sdk": "^0.40.0",
-        "openai": "^5.0.0",
+        "@types/node": "^22.0.0",
         "typescript": "^5.5.0"
     },
     "engines": {
