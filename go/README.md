@@ -6,7 +6,7 @@ TypeScript reference (asserted against `../parity/*.json`). Uses only the
 standard library, including `net/http` for the SelfLLM provider calls.
 
 ```go
-import leanctx "github.com/jia-gao/leanctx/go"
+import leanctx "github.com/itaides/leanctx/go"
 
 mw := leanctx.NewMiddleware(leanctx.Config{
     Mode:    "on",

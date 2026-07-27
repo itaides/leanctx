@@ -12,16 +12,16 @@
         "context",
         "tokens"
     ],
-    "author": "jia-gao",
+    "author": "itaides",
     "license": "MIT",
-    "homepage": "https://github.com/jia-gao/leanctx",
+    "homepage": "https://github.com/itaides/leanctx",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/jia-gao/leanctx.git",
+        "url": "git+https://github.com/itaides/leanctx.git",
         "directory": "ts"
     },
     "bugs": {
-        "url": "https://github.com/jia-gao/leanctx/issues"
+        "url": "https://github.com/itaides/leanctx/issues"
     },
     "type": "module",
     "main": "./dist/index.js",
